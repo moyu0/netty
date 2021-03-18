@@ -5,7 +5,7 @@
  * version 2.0 (the "License"); you may not use this file except in compliance
  * with the License. You may obtain a copy of the License at:
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *   https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
@@ -20,7 +20,7 @@ import org.slf4j.spi.LocationAwareLogger;
 import static org.slf4j.spi.LocationAwareLogger.*;
 
 /**
- * <a href="http://www.slf4j.org/">SLF4J</a> logger which is location aware and so will log the correct origin of the
+ * <a href="https://www.slf4j.org/">SLF4J</a> logger which is location aware and so will log the correct origin of the
  * logging event by filter out the wrapper itself.
  */
 final class LocationAwareSlf4JLogger extends AbstractInternalLogger {
@@ -79,7 +79,7 @@ final class LocationAwareSlf4JLogger extends AbstractInternalLogger {
     @Override
     public void trace(String format, Object... argArray) {
         if (isTraceEnabled()) {
-            log(TRACE_INT, org.slf4j.helpers.MessageFormatter.format(format, argArray));
+            log(TRACE_INT, org.slf4j.helpers.MessageFormatter.arrayFormat(format, argArray));
         }
     }
 
@@ -119,7 +119,7 @@ final class LocationAwareSlf4JLogger extends AbstractInternalLogger {
     @Override
     public void debug(String format, Object... argArray) {
         if (isDebugEnabled()) {
-            log(DEBUG_INT, org.slf4j.helpers.MessageFormatter.format(format, argArray));
+            log(DEBUG_INT, org.slf4j.helpers.MessageFormatter.arrayFormat(format, argArray));
         }
     }
 
@@ -159,7 +159,7 @@ final class LocationAwareSlf4JLogger extends AbstractInternalLogger {
     @Override
     public void info(String format, Object... argArray) {
         if (isInfoEnabled()) {
-            log(INFO_INT, org.slf4j.helpers.MessageFormatter.format(format, argArray));
+            log(INFO_INT, org.slf4j.helpers.MessageFormatter.arrayFormat(format, argArray));
         }
     }
 
@@ -192,7 +192,7 @@ final class LocationAwareSlf4JLogger extends AbstractInternalLogger {
     @Override
     public void warn(String format, Object... argArray) {
         if (isWarnEnabled()) {
-            log(WARN_INT, org.slf4j.helpers.MessageFormatter.format(format, argArray));
+            log(WARN_INT, org.slf4j.helpers.MessageFormatter.arrayFormat(format, argArray));
         }
     }
 
@@ -239,7 +239,7 @@ final class LocationAwareSlf4JLogger extends AbstractInternalLogger {
     @Override
     public void error(String format, Object... argArray) {
         if (isErrorEnabled()) {
-            log(ERROR_INT, org.slf4j.helpers.MessageFormatter.format(format, argArray));
+            log(ERROR_INT, org.slf4j.helpers.MessageFormatter.arrayFormat(format, argArray));
         }
     }
 
