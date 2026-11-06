@@ -5,7 +5,7 @@
  * version 2.0 (the "License"); you may not use this file except in compliance
  * with the License. You may obtain a copy of the License at:
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *   https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
@@ -17,15 +17,12 @@ package io.netty.handler.codec.dns;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.handler.codec.CorruptedFrameException;
-import io.netty.util.CharsetUtil;
-import io.netty.util.internal.UnstableApi;
 
 /**
  * The default {@link DnsRecordDecoder} implementation.
  *
  * @see DefaultDnsRecordEncoder
  */
-@UnstableApi
 public class DefaultDnsRecordDecoder implements DnsRecordDecoder {
 
     static final String ROOT = ".";
@@ -49,7 +46,7 @@ public class DefaultDnsRecordDecoder implements DnsRecordDecoder {
         final String name = decodeName(in);
 
         final int endOffset = in.writerIndex();
-        if (endOffset - startOffset < 10) {
+        if (endOffset - in.readerIndex() < 10) {
             // Not enough data
             in.readerIndex(startOffset);
             return null;
@@ -98,8 +95,60 @@ public class DefaultDnsRecordDecoder implements DnsRecordDecoder {
             return new DefaultDnsPtrRecord(
                     name, dnsClass, timeToLive, decodeName0(in.duplicate().setIndex(offset, offset + length)));
         }
-        return new DefaultDnsRawRecord(
-                name, type, dnsClass, timeToLive, in.retainedDuplicate().setIndex(offset, offset + length));
+        if (type == DnsRecordType.CNAME || type == DnsRecordType.NS) {
+            ByteBuf decompressed = DnsCodecUtil.decompressDomainName(
+                    in.duplicate().setIndex(offset, offset + length));
+            try {
+                DnsRecord record = new DefaultDnsRawRecord(name, type, dnsClass, timeToLive, decompressed);
+                decompressed = null;
+                return record;
+            } finally {
+                if (decompressed != null) {
+                    decompressed.release();
+                }
+            }
+        }
+        if (type ==  DnsRecordType.MX) {
+            // MX RDATA: 16-bit preference + exchange (domain name, possibly compressed)
+            if (length < 3) {
+                throw new CorruptedFrameException("MX record RDATA is too short: " + length);
+            }
+            final int pref = in.getUnsignedShort(offset);
+            ByteBuf exchange = null;
+            ByteBuf out = null;
+            try {
+                exchange = DnsCodecUtil.decompressDomainName(
+                        in.duplicate().setIndex(offset + 2, offset + length));
+
+                // Build decompressed RDATA = [preference][expanded exchange name]
+                out = in.alloc().buffer(2 + exchange.readableBytes());
+                out.writeShort(pref);
+                out.writeBytes(exchange);
+
+                DnsRecord record = new DefaultDnsRawRecord(name, type, dnsClass, timeToLive, out);
+                out = null;
+                return record;
+            } finally {
+                if (exchange != null) {
+                    exchange.release();
+                }
+                if (out != null) {
+                    out.release();
+                }
+            }
+        }
+
+        ByteBuf content = in.retainedDuplicate();
+        try {
+            content.setIndex(offset, offset + length);
+            DnsRecord record = new DefaultDnsRawRecord(name, type, dnsClass, timeToLive, content);
+            content = null;
+            return record;
+        } finally {
+            if (content != null) {
+                content.release();
+            }
+        }
     }
 
     /**
@@ -123,69 +172,6 @@ public class DefaultDnsRecordDecoder implements DnsRecordDecoder {
      * @return the domain name for an entry
      */
     public static String decodeName(ByteBuf in) {
-        int position = -1;
-        int checked = 0;
-        final int end = in.writerIndex();
-        final int readable = in.readableBytes();
-
-        // Looking at the spec we should always have at least enough readable bytes to read a byte here but it seems
-        // some servers do not respect this for empty names. So just workaround this and return an empty name in this
-        // case.
-        //
-        // See:
-        // - https://github.com/netty/netty/issues/5014
-        // - https://www.ietf.org/rfc/rfc1035.txt , Section 3.1
-        if (readable == 0) {
-            return ROOT;
-        }
-
-        final StringBuilder name = new StringBuilder(readable << 1);
-        while (in.isReadable()) {
-            final int len = in.readUnsignedByte();
-            final boolean pointer = (len & 0xc0) == 0xc0;
-            if (pointer) {
-                if (position == -1) {
-                    position = in.readerIndex() + 1;
-                }
-
-                if (!in.isReadable()) {
-                    throw new CorruptedFrameException("truncated pointer in a name");
-                }
-
-                final int next = (len & 0x3f) << 8 | in.readUnsignedByte();
-                if (next >= end) {
-                    throw new CorruptedFrameException("name has an out-of-range pointer");
-                }
-                in.readerIndex(next);
-
-                // check for loops
-                checked += 2;
-                if (checked >= end) {
-                    throw new CorruptedFrameException("name contains a loop.");
-                }
-            } else if (len != 0) {
-                if (!in.isReadable(len)) {
-                    throw new CorruptedFrameException("truncated label in a name");
-                }
-                name.append(in.toString(in.readerIndex(), len, CharsetUtil.UTF_8)).append('.');
-                in.skipBytes(len);
-            } else { // len == 0
-                break;
-            }
-        }
-
-        if (position != -1) {
-            in.readerIndex(position);
-        }
-
-        if (name.length() == 0) {
-            return ROOT;
-        }
-
-        if (name.charAt(name.length() - 1) != '.') {
-            name.append('.');
-        }
-
-        return name.toString();
+        return DnsCodecUtil.decodeDomainName(in);
     }
 }

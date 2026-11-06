@@ -5,7 +5,7 @@
  * version 2.0 (the "License"); you may not use this file except in compliance
  * with the License. You may obtain a copy of the License at:
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *   https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
@@ -28,6 +28,7 @@ import io.netty.util.ReferenceCountUtil;
 import java.util.List;
 
 import static io.netty.buffer.Unpooled.EMPTY_BUFFER;
+import static io.netty.util.internal.ObjectUtil.checkPositiveOrZero;
 
 /**
  * An abstract {@link ChannelHandler} that aggregates a series of message objects into a single aggregated message.
@@ -61,6 +62,9 @@ public abstract class MessageAggregator<I, S, C extends ByteBufHolder, O extends
     private ChannelHandlerContext ctx;
     private ChannelFutureListener continueResponseWriteListener;
 
+    private boolean aggregating;
+    private boolean handleIncompleteAggregateDuringClose = true;
+
     /**
      * Creates a new instance.
      *
@@ -81,9 +85,7 @@ public abstract class MessageAggregator<I, S, C extends ByteBufHolder, O extends
     }
 
     private static void validateMaxContentLength(int maxContentLength) {
-        if (maxContentLength < 0) {
-            throw new IllegalArgumentException("maxContentLength: " + maxContentLength + " (expected: >= 0)");
-        }
+        checkPositiveOrZero(maxContentLength, "maxContentLength");
     }
 
     @Override
@@ -96,7 +98,17 @@ public abstract class MessageAggregator<I, S, C extends ByteBufHolder, O extends
         @SuppressWarnings("unchecked")
         I in = (I) msg;
 
-        return (isContentMessage(in) || isStartMessage(in)) && !isAggregated(in);
+        if (isAggregated(in)) {
+            return false;
+        }
+
+        // NOTE: It's tempting to make this check only if aggregating is false. There are however
+        // side conditions in decode(...) in respect to large messages.
+        if (isStartMessage(in)) {
+            return true;
+        } else {
+            return aggregating && isContentMessage(in);
+        }
     }
 
     /**
@@ -193,6 +205,7 @@ public abstract class MessageAggregator<I, S, C extends ByteBufHolder, O extends
     @Override
     protected void decode(final ChannelHandlerContext ctx, I msg, List<Object> out) throws Exception {
         if (isStartMessage(msg)) {
+            aggregating = true;
             handlingOversizedMessage = false;
             if (currentMessage != null) {
                 currentMessage.release();
@@ -227,6 +240,7 @@ public abstract class MessageAggregator<I, S, C extends ByteBufHolder, O extends
                 final ChannelFuture future = ctx.writeAndFlush(continueResponse).addListener(listener);
 
                 if (closeAfterWrite) {
+                    handleIncompleteAggregateDuringClose = false;
                     future.addListener(ChannelFutureListener.CLOSE);
                     return;
                 }
@@ -246,7 +260,7 @@ public abstract class MessageAggregator<I, S, C extends ByteBufHolder, O extends
                 } else {
                     aggregated = beginAggregation(m, EMPTY_BUFFER);
                 }
-                finishAggregation(aggregated);
+                finishAggregation0(aggregated);
                 out.add(aggregated);
                 return;
             }
@@ -301,7 +315,7 @@ public abstract class MessageAggregator<I, S, C extends ByteBufHolder, O extends
             }
 
             if (last) {
-                finishAggregation(currentMessage);
+                finishAggregation0(currentMessage);
 
                 // All done
                 out.add(currentMessage);
@@ -371,6 +385,11 @@ public abstract class MessageAggregator<I, S, C extends ByteBufHolder, O extends
      */
     protected void aggregate(O aggregated, C content) throws Exception { }
 
+    private void finishAggregation0(O aggregated) throws Exception {
+        aggregating = false;
+        finishAggregation(aggregated);
+    }
+
     /**
      * Invoked when the specified {@code aggregated} message is about to be passed to the next handler in the pipeline.
      */
@@ -379,6 +398,7 @@ public abstract class MessageAggregator<I, S, C extends ByteBufHolder, O extends
     private void invokeHandleOversizedMessage(ChannelHandlerContext ctx, S oversized) throws Exception {
         handlingOversizedMessage = true;
         currentMessage = null;
+        handleIncompleteAggregateDuringClose = false;
         try {
             handleOversizedMessage(ctx, oversized);
         } finally {
@@ -412,6 +432,10 @@ public abstract class MessageAggregator<I, S, C extends ByteBufHolder, O extends
 
     @Override
     public void channelInactive(ChannelHandlerContext ctx) throws Exception {
+        if (aggregating && handleIncompleteAggregateDuringClose) {
+            ctx.fireExceptionCaught(
+                    new PrematureChannelClosureException("Channel closed while still aggregating message"));
+        }
         try {
             // release current message if it is not null as it may be a left-over
             super.channelInactive(ctx);
@@ -436,11 +460,12 @@ public abstract class MessageAggregator<I, S, C extends ByteBufHolder, O extends
         }
     }
 
-    private void releaseCurrentMessage() {
+    protected final void releaseCurrentMessage() {
         if (currentMessage != null) {
             currentMessage.release();
             currentMessage = null;
-            handlingOversizedMessage = false;
         }
+        handlingOversizedMessage = false;
+        aggregating = false;
     }
 }

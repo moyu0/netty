@@ -5,7 +5,7 @@
  * version 2.0 (the "License"); you may not use this file except in compliance
  * with the License. You may obtain a copy of the License at:
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *   https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
@@ -18,6 +18,7 @@ package io.netty.testsuite.transport.socket;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.buffer.ByteBuf;
+import io.netty.buffer.ByteBufAllocator;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandler.Sharable;
 import io.netty.channel.ChannelHandlerContext;
@@ -34,11 +35,12 @@ import io.netty.handler.ssl.util.SelfSignedCertificate;
 import io.netty.util.concurrent.Future;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
-import org.junit.Assume;
-import org.junit.Test;
-import org.junit.runner.RunWith;
-import org.junit.runners.Parameterized;
-import org.junit.runners.Parameterized.Parameters;
+import org.junit.jupiter.api.TestInfo;
+import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.api.condition.DisabledIf;
+import org.junit.jupiter.api.function.Executable;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
 
 import java.io.File;
 import java.nio.channels.ClosedChannelException;
@@ -46,17 +48,22 @@ import java.security.cert.CertificateException;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
+import java.util.concurrent.Executor;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
 import javax.net.ssl.SSLHandshakeException;
 
-import static org.junit.Assert.assertSame;
-import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeFalse;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
-@RunWith(Parameterized.class)
 public class SocketSslClientRenegotiateTest extends AbstractSocketTest {
-
     private static final InternalLogger logger = InternalLoggerFactory.getInstance(
             SocketSslClientRenegotiateTest.class);
     private static final File CERT_FILE;
@@ -73,7 +80,10 @@ public class SocketSslClientRenegotiateTest extends AbstractSocketTest {
         KEY_FILE = ssc.privateKey();
     }
 
-    @Parameters(name = "{index}: serverEngine = {0}, clientEngine = {1}")
+    private static boolean openSslNotAvailable() {
+        return !OpenSsl.isAvailable();
+    }
+
     public static Collection<Object[]> data() throws Exception {
         List<SslContext> serverContexts = new ArrayList<SslContext>();
         List<SslContext> clientContexts = new ArrayList<SslContext>();
@@ -91,16 +101,14 @@ public class SocketSslClientRenegotiateTest extends AbstractSocketTest {
         for (SslContext sc: serverContexts) {
             for (SslContext cc: clientContexts) {
                 for (int i = 0; i < 32; i++) {
-                    params.add(new Object[] { sc, cc});
+                    params.add(new Object[] { sc, cc, true});
+                    params.add(new Object[] { sc, cc, false});
                 }
             }
         }
 
         return params;
     }
-
-    private final SslContext serverCtx;
-    private final SslContext clientCtx;
 
     private final AtomicReference<Throwable> clientException = new AtomicReference<Throwable>();
     private final AtomicReference<Throwable> serverException = new AtomicReference<Throwable>();
@@ -115,72 +123,94 @@ public class SocketSslClientRenegotiateTest extends AbstractSocketTest {
 
     private final TestHandler serverHandler = new TestHandler(serverException);
 
-    public SocketSslClientRenegotiateTest(
-            SslContext serverCtx, SslContext clientCtx) {
-        this.serverCtx = serverCtx;
-        this.clientCtx = clientCtx;
-    }
-
-    @Test(timeout = 30000)
-    public void testSslRenegotiationRejected() throws Throwable {
+    @DisabledIf("openSslNotAvailable")
+    @ParameterizedTest(name = "{index}: serverEngine = {0}, clientEngine = {1}, delegate = {2}")
+    @MethodSource("data")
+    @Timeout(value = 30000, unit = TimeUnit.MILLISECONDS)
+    public void testSslRenegotiationRejected(final SslContext serverCtx, final SslContext clientCtx,
+                                             final boolean delegate, TestInfo testInfo) throws Throwable {
         // BoringSSL does not support renegotiation intentionally.
-        Assume.assumeFalse("BoringSSL".equals(OpenSsl.versionString()));
-        Assume.assumeTrue(OpenSsl.isAvailable());
-        run();
+        assumeFalse("BoringSSL".equals(OpenSsl.versionString()) || OpenSsl.versionString().startsWith("AWS-LC"));
+        assumeTrue(OpenSsl.isAvailable());
+        run(testInfo, new Runner<ServerBootstrap, Bootstrap>() {
+            @Override
+            public void run(ServerBootstrap serverBootstrap, Bootstrap bootstrap) throws Throwable {
+                testSslRenegotiationRejected(sb, cb, serverCtx, clientCtx, delegate);
+            }
+        });
     }
 
-    public void testSslRenegotiationRejected(ServerBootstrap sb, Bootstrap cb) throws Throwable {
+    private static SslHandler newSslHandler(SslContext sslCtx, ByteBufAllocator allocator, Executor executor) {
+        if (executor == null) {
+            return sslCtx.newHandler(allocator);
+        } else {
+            return sslCtx.newHandler(allocator, executor);
+        }
+    }
+
+    public void testSslRenegotiationRejected(ServerBootstrap sb, Bootstrap cb, final SslContext serverCtx,
+                                             final SslContext clientCtx, boolean delegate) throws Throwable {
         reset();
 
-        sb.childHandler(new ChannelInitializer<Channel>() {
-            @Override
-            @SuppressWarnings("deprecation")
-            public void initChannel(Channel sch) throws Exception {
-                serverChannel = sch;
-                serverSslHandler = serverCtx.newHandler(sch.alloc());
-                // As we test renegotiation we should use a protocol that support it.
-                serverSslHandler.engine().setEnabledProtocols(new String[] { "TLSv1.2" });
-                sch.pipeline().addLast("ssl", serverSslHandler);
-                sch.pipeline().addLast("handler", serverHandler);
-            }
-        });
+        final ExecutorService executorService = delegate ? Executors.newCachedThreadPool() : null;
 
-        cb.handler(new ChannelInitializer<Channel>() {
-            @Override
-            @SuppressWarnings("deprecation")
-            public void initChannel(Channel sch) throws Exception {
-                clientChannel = sch;
-                clientSslHandler = clientCtx.newHandler(sch.alloc());
-                // As we test renegotiation we should use a protocol that support it.
-                clientSslHandler.engine().setEnabledProtocols(new String[] { "TLSv1.2" });
-                sch.pipeline().addLast("ssl", clientSslHandler);
-                sch.pipeline().addLast("handler", clientHandler);
-            }
-        });
-
-        Channel sc = sb.bind().sync().channel();
-        cb.connect(sc.localAddress()).sync();
-
-        Future<Channel> clientHandshakeFuture = clientSslHandler.handshakeFuture();
-        clientHandshakeFuture.sync();
-
-        String renegotiation = clientSslHandler.engine().getEnabledCipherSuites()[0];
-        // Use the first previous enabled ciphersuite and try to renegotiate.
-        clientSslHandler.engine().setEnabledCipherSuites(new String[] { renegotiation });
-        clientSslHandler.renegotiate().await();
-        serverChannel.close().awaitUninterruptibly();
-        clientChannel.close().awaitUninterruptibly();
-        sc.close().awaitUninterruptibly();
         try {
-            if (serverException.get() != null) {
-                throw serverException.get();
+            sb.childHandler(new ChannelInitializer<Channel>() {
+                @Override
+                @SuppressWarnings("deprecation")
+                public void initChannel(Channel sch) throws Exception {
+                    serverChannel = sch;
+                    serverSslHandler = newSslHandler(serverCtx, sch.alloc(), executorService);
+                    // As we test renegotiation we should use a protocol that support it.
+                    serverSslHandler.engine().setEnabledProtocols(new String[]{"TLSv1.2"});
+                    sch.pipeline().addLast("ssl", serverSslHandler);
+                    sch.pipeline().addLast("handler", serverHandler);
+                }
+            });
+
+            cb.handler(new ChannelInitializer<Channel>() {
+                @Override
+                @SuppressWarnings("deprecation")
+                public void initChannel(Channel sch) throws Exception {
+                    clientChannel = sch;
+                    clientSslHandler = newSslHandler(clientCtx, sch.alloc(), executorService);
+                    // As we test renegotiation we should use a protocol that support it.
+                    clientSslHandler.engine().setEnabledProtocols(new String[]{"TLSv1.2"});
+                    sch.pipeline().addLast("ssl", clientSslHandler);
+                    sch.pipeline().addLast("handler", clientHandler);
+                }
+            });
+
+            Channel sc = sb.bind().sync().channel();
+            cb.connect(sc.localAddress()).sync();
+
+            Future<Channel> clientHandshakeFuture = clientSslHandler.handshakeFuture();
+            clientHandshakeFuture.sync();
+
+            String renegotiation = clientSslHandler.engine().getEnabledCipherSuites()[0];
+            // Use the first previous enabled ciphersuite and try to renegotiate.
+            clientSslHandler.engine().setEnabledCipherSuites(new String[]{renegotiation});
+            clientSslHandler.renegotiate().await();
+            serverChannel.close().awaitUninterruptibly();
+            clientChannel.close().awaitUninterruptibly();
+            sc.close().awaitUninterruptibly();
+            DecoderException e = assertThrows(DecoderException.class, new Executable() {
+                @Override
+                public void execute() throws Throwable {
+                    if (serverException.get() != null) {
+                        throw serverException.get();
+                    }
+                }
+            });
+            assertInstanceOf(SSLHandshakeException.class, e.getCause());
+            if (clientException.get() != null) {
+                throw clientException.get();
             }
-            fail();
-        } catch (DecoderException e) {
-            assertTrue(e.getCause() instanceof SSLHandshakeException);
-        }
-        if (clientException.get() != null) {
-            throw clientException.get();
+        } finally {
+            if (executorService != null) {
+                executorService.shutdown();
+                assertTrue(executorService.awaitTermination(5, TimeUnit.SECONDS));
+            }
         }
     }
 
@@ -229,7 +259,7 @@ public class SocketSslClientRenegotiateTest extends AbstractSocketTest {
                     assertSame(SslHandshakeCompletionEvent.SUCCESS, evt);
                 } else {
                     if (ctx.channel().parent() == null) {
-                        assertTrue(handshakeEvt.cause() instanceof ClosedChannelException);
+                        assertInstanceOf(ClosedChannelException.class, handshakeEvt.cause());
                     }
                 }
             }

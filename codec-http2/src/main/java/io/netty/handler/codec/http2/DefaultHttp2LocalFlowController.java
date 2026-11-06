@@ -5,7 +5,7 @@
  * "License"); you may not use this file except in compliance with the License. You may obtain a
  * copy of the License at:
  *
- * http://www.apache.org/licenses/LICENSE-2.0
+ * https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software distributed under the License
  * is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
@@ -24,6 +24,7 @@ import static io.netty.handler.codec.http2.Http2Error.INTERNAL_ERROR;
 import static io.netty.handler.codec.http2.Http2Exception.connectionError;
 import static io.netty.handler.codec.http2.Http2Exception.streamError;
 import static io.netty.util.internal.ObjectUtil.checkNotNull;
+import static io.netty.util.internal.ObjectUtil.checkPositiveOrZero;
 import static java.lang.Math.max;
 import static java.lang.Math.min;
 import io.netty.buffer.ByteBuf;
@@ -31,7 +32,6 @@ import io.netty.channel.ChannelHandlerContext;
 import io.netty.handler.codec.http2.Http2Exception.CompositeStreamException;
 import io.netty.handler.codec.http2.Http2Exception.StreamException;
 import io.netty.util.internal.PlatformDependent;
-import io.netty.util.internal.UnstableApi;
 
 /**
  * Basic implementation of {@link Http2LocalFlowController}.
@@ -39,7 +39,6 @@ import io.netty.util.internal.UnstableApi;
  * This class is <strong>NOT</strong> thread safe. The assumption is all methods must be invoked from a single thread.
  * Typically this thread is the event loop thread for the {@link ChannelHandlerContext} managed by this class.
  */
-@UnstableApi
 public class DefaultHttp2LocalFlowController implements Http2LocalFlowController {
     /**
      * The default ratio of window size to initial window size below which a {@code WINDOW_UPDATE}
@@ -108,8 +107,11 @@ public class DefaultHttp2LocalFlowController implements Http2LocalFlowController
                     FlowState state = state(stream);
                     int unconsumedBytes = state.unconsumedBytes();
                     if (ctx != null && unconsumedBytes > 0) {
-                        connectionState().consumeBytes(unconsumedBytes);
-                        state.consumeBytes(unconsumedBytes);
+                        if (consumeAllBytes(state, unconsumedBytes)) {
+                            // As the user has no real control on when this callback is used we should better
+                            // call flush() if we produced any window update to ensure we not stale.
+                            ctx.flush();
+                        }
                     }
                 } catch (Http2Exception e) {
                     PlatformDependent.throwException(e);
@@ -173,25 +175,27 @@ public class DefaultHttp2LocalFlowController implements Http2LocalFlowController
     @Override
     public boolean consumeBytes(Http2Stream stream, int numBytes) throws Http2Exception {
         assert ctx != null && ctx.executor().inEventLoop();
-        if (numBytes < 0) {
-            throw new IllegalArgumentException("numBytes must not be negative");
-        }
+        checkPositiveOrZero(numBytes, "numBytes");
         if (numBytes == 0) {
             return false;
         }
 
-        // Streams automatically consume all remaining bytes when they are closed, so just ignore
-        // if already closed.
-        if (stream != null && !isClosed(stream)) {
+        if (stream != null) {
             if (stream.id() == CONNECTION_STREAM_ID) {
                 throw new UnsupportedOperationException("Returning bytes for the connection window is not supported");
             }
 
-            boolean windowUpdateSent = connectionState().consumeBytes(numBytes);
-            windowUpdateSent |= state(stream).consumeBytes(numBytes);
-            return windowUpdateSent;
+            // Streams automatically consume all remaining bytes when they are closed, and streams that are not
+            // active yet (IDLE or RESERVED_*) never have bytes accounted to them, so just ignore those.
+            if (isActive(stream)) {
+                return consumeAllBytes(state(stream), numBytes);
+            }
         }
         return false;
+    }
+
+    private boolean consumeAllBytes(FlowState state, int numBytes) throws Http2Exception {
+        return connectionState().consumeBytes(numBytes) | state.consumeBytes(numBytes);
     }
 
     @Override
@@ -232,7 +236,7 @@ public class DefaultHttp2LocalFlowController implements Http2LocalFlowController
      * of bytes processed since the last update has meet or exceeded this ratio then a window update will
      * be sent. This window update ratio will only be applied to {@code streamId}.
      * <p>
-     * Note it is the responsibly of the caller to ensure that the the
+     * Note it is the responsibly of the caller to ensure that the
      * initial {@code SETTINGS} frame is sent before this is called. It would
      * be considered a {@link Http2Error#PROTOCOL_ERROR} if a {@code WINDOW_UPDATE}
      * was generated by this method before the initial {@code SETTINGS} frame is sent.
@@ -268,7 +272,7 @@ public class DefaultHttp2LocalFlowController implements Http2LocalFlowController
         FlowState connectionState = connectionState();
         connectionState.receiveFlowControlledFrame(dataLength);
 
-        if (stream != null && !isClosed(stream)) {
+        if (stream != null && isActive(stream)) {
             // Apply the stream-level flow control
             FlowState state = state(stream);
             state.endOfStream(endOfStream);
@@ -287,6 +291,21 @@ public class DefaultHttp2LocalFlowController implements Http2LocalFlowController
         return stream.getProperty(stateKey);
     }
 
+    /**
+     * Returns {@code true} if the stream is active and so has its own flow control state. Streams that are
+     * {@code IDLE}, {@code RESERVED_*} or {@code CLOSED} use the {@link #REDUCED_FLOW_STATE}.
+     */
+    private static boolean isActive(Http2Stream stream) {
+        switch (stream.state()) {
+            case OPEN:
+            case HALF_CLOSED_LOCAL:
+            case HALF_CLOSED_REMOTE:
+                return true;
+            default:
+                return false;
+        }
+    }
+
     private static boolean isClosed(Http2Stream stream) {
         return stream.state() == Http2Stream.State.CLOSED;
     }
@@ -296,7 +315,7 @@ public class DefaultHttp2LocalFlowController implements Http2LocalFlowController
      * received.
      */
     private final class AutoRefillState extends DefaultState {
-        public AutoRefillState(Http2Stream stream, int initialWindowSize) {
+        AutoRefillState(Http2Stream stream, int initialWindowSize) {
             super(stream, initialWindowSize);
         }
 
@@ -349,7 +368,7 @@ public class DefaultHttp2LocalFlowController implements Http2LocalFlowController
         private int lowerBound;
         private boolean endOfStream;
 
-        public DefaultState(Http2Stream stream, int initialWindowSize) {
+        DefaultState(Http2Stream stream, int initialWindowSize) {
             this.stream = stream;
             window(initialWindowSize);
             streamWindowUpdateRatio = windowUpdateRatio;
@@ -406,7 +425,7 @@ public class DefaultHttp2LocalFlowController implements Http2LocalFlowController
 
             window += delta;
             processedWindow += delta;
-            lowerBound = delta < 0 ? delta : 0;
+            lowerBound = min(delta, 0);
         }
 
         @Override
@@ -449,7 +468,9 @@ public class DefaultHttp2LocalFlowController implements Http2LocalFlowController
 
         @Override
         public boolean writeWindowUpdateIfNeeded() throws Http2Exception {
-            if (endOfStream || initialStreamWindowSize <= 0) {
+            if (endOfStream || initialStreamWindowSize <= 0 ||
+                    // If the stream is already closed there is no need to try to write a window update for it.
+                    isClosed(stream)) {
                 return false;
             }
 
@@ -613,7 +634,7 @@ public class DefaultHttp2LocalFlowController implements Http2LocalFlowController
         private CompositeStreamException compositeException;
         private final int delta;
 
-        public WindowUpdateVisitor(int delta) {
+        WindowUpdateVisitor(int delta) {
             this.delta = delta;
         }
 

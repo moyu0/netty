@@ -5,7 +5,7 @@
  * version 2.0 (the "License"); you may not use this file except in compliance
  * with the License. You may obtain a copy of the License at:
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *   https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
@@ -14,6 +14,8 @@
  * under the License.
  */
 package io.netty.channel;
+
+import static io.netty.util.internal.ObjectUtil.checkPositive;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufAllocator;
@@ -24,6 +26,7 @@ import io.netty.util.UncheckedBooleanSupplier;
  * and also prevents overflow.
  */
 public abstract class DefaultMaxMessagesRecvByteBufAllocator implements MaxMessagesRecvByteBufAllocator {
+    private final boolean ignoreBytesRead;
     private volatile int maxMessagesPerRead;
     private volatile boolean respectMaybeMoreData = true;
 
@@ -32,6 +35,11 @@ public abstract class DefaultMaxMessagesRecvByteBufAllocator implements MaxMessa
     }
 
     public DefaultMaxMessagesRecvByteBufAllocator(int maxMessagesPerRead) {
+        this(maxMessagesPerRead, false);
+    }
+
+    DefaultMaxMessagesRecvByteBufAllocator(int maxMessagesPerRead, boolean ignoreBytesRead) {
+        this.ignoreBytesRead = ignoreBytesRead;
         maxMessagesPerRead(maxMessagesPerRead);
     }
 
@@ -42,9 +50,7 @@ public abstract class DefaultMaxMessagesRecvByteBufAllocator implements MaxMessa
 
     @Override
     public MaxMessagesRecvByteBufAllocator maxMessagesPerRead(int maxMessagesPerRead) {
-        if (maxMessagesPerRead <= 0) {
-            throw new IllegalArgumentException("maxMessagesPerRead: " + maxMessagesPerRead + " (expected: > 0)");
-        }
+        checkPositive(maxMessagesPerRead, "maxMessagesPerRead");
         this.maxMessagesPerRead = maxMessagesPerRead;
         return this;
     }
@@ -141,8 +147,7 @@ public abstract class DefaultMaxMessagesRecvByteBufAllocator implements MaxMessa
         public boolean continueReading(UncheckedBooleanSupplier maybeMoreDataSupplier) {
             return config.isAutoRead() &&
                    (!respectMaybeMoreData || maybeMoreDataSupplier.get()) &&
-                   totalMessages < maxMessagePerRead &&
-                   totalBytesRead > 0;
+                   totalMessages < maxMessagePerRead && (ignoreBytesRead || totalBytesRead > 0);
         }
 
         @Override

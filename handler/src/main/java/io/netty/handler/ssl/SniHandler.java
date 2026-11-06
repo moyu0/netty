@@ -5,7 +5,7 @@
  * version 2.0 (the "License"); you may not use this file except in compliance
  * with the License. You may obtain a copy of the License at:
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *   https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
@@ -15,6 +15,7 @@
  */
 package io.netty.handler.ssl;
 
+import io.netty.buffer.ByteBufAllocator;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.handler.codec.DecoderException;
 import io.netty.util.AsyncMapping;
@@ -52,6 +53,19 @@ public class SniHandler extends AbstractSniHandler<SslContext> {
 
     /**
      * Creates a SNI detection handler with configured {@link SslContext}
+     * maintained by {@link Mapping}
+     *
+     * @param mapping the mapping of domain name to {@link SslContext}
+     * @param maxClientHelloLength the maximum length of the client hello message
+     * @param handshakeTimeoutMillis the handshake timeout in milliseconds
+     */
+    public SniHandler(Mapping<? super String, ? extends SslContext> mapping,
+                      int maxClientHelloLength, long handshakeTimeoutMillis) {
+        this(new AsyncMappingAdapter(mapping), maxClientHelloLength, handshakeTimeoutMillis);
+    }
+
+    /**
+     * Creates a SNI detection handler with configured {@link SslContext}
      * maintained by {@link DomainNameMapping}
      *
      * @param mapping the mapping of domain name to {@link SslContext}
@@ -68,7 +82,44 @@ public class SniHandler extends AbstractSniHandler<SslContext> {
      */
     @SuppressWarnings("unchecked")
     public SniHandler(AsyncMapping<? super String, ? extends SslContext> mapping) {
+        this(mapping, DEFAULT_MAX_CLIENT_HELLO_LENGTH, DEFAULT_HANDSHAKE_TIMEOUT_MILLIS);
+    }
+
+    /**
+     * Creates a SNI detection handler with configured {@link SslContext}
+     * maintained by {@link AsyncMapping}
+     *
+     * @param mapping the mapping of domain name to {@link SslContext}
+     * @param maxClientHelloLength the maximum length of the client hello message
+     * @param handshakeTimeoutMillis the handshake timeout in milliseconds
+     */
+    @SuppressWarnings("unchecked")
+    public SniHandler(AsyncMapping<? super String, ? extends SslContext> mapping,
+                      int maxClientHelloLength, long handshakeTimeoutMillis) {
+        super(maxClientHelloLength, handshakeTimeoutMillis);
         this.mapping = (AsyncMapping<String, SslContext>) ObjectUtil.checkNotNull(mapping, "mapping");
+    }
+
+    /**
+     * Creates a SNI detection handler with configured {@link SslContext}
+     * maintained by {@link Mapping}
+     *
+     * @param mapping the mapping of domain name to {@link SslContext}
+     * @param handshakeTimeoutMillis the handshake timeout in milliseconds
+     */
+    public SniHandler(Mapping<? super String, ? extends SslContext> mapping, long handshakeTimeoutMillis) {
+        this(new AsyncMappingAdapter(mapping), handshakeTimeoutMillis);
+    }
+
+    /**
+     * Creates a SNI detection handler with configured {@link SslContext}
+     * maintained by {@link AsyncMapping}
+     *
+     * @param mapping the mapping of domain name to {@link SslContext}
+     * @param handshakeTimeoutMillis the handshake timeout in milliseconds
+     */
+    public SniHandler(AsyncMapping<? super String, ? extends SslContext> mapping, long handshakeTimeoutMillis) {
+        this(mapping, DEFAULT_MAX_CLIENT_HELLO_LENGTH, handshakeTimeoutMillis);
     }
 
     /**
@@ -129,7 +180,7 @@ public class SniHandler extends AbstractSniHandler<SslContext> {
     protected void replaceHandler(ChannelHandlerContext ctx, String hostname, SslContext sslContext) throws Exception {
         SslHandler sslHandler = null;
         try {
-            sslHandler = sslContext.newHandler(ctx.alloc());
+            sslHandler = newSslHandler(sslContext, ctx.alloc());
             ctx.pipeline().replace(this, SslHandler.class.getName(), sslHandler);
             sslHandler = null;
         } finally {
@@ -140,6 +191,16 @@ public class SniHandler extends AbstractSniHandler<SslContext> {
                 ReferenceCountUtil.safeRelease(sslHandler.engine());
             }
         }
+    }
+
+    /**
+     * Returns a new {@link SslHandler} using the given {@link SslContext} and {@link ByteBufAllocator}.
+     * Users may override this method to implement custom behavior.
+     */
+    protected SslHandler newSslHandler(SslContext context, ByteBufAllocator allocator) {
+        SslHandler sslHandler = context.newHandler(allocator);
+        sslHandler.setHandshakeTimeoutMillis(handshakeTimeoutMillis);
+        return sslHandler;
     }
 
     private static final class AsyncMappingAdapter implements AsyncMapping<String, SslContext> {

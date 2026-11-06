@@ -5,7 +5,7 @@
  * version 2.0 (the "License"); you may not use this file except in compliance
  * with the License. You may obtain a copy of the License at:
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *   https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
@@ -50,6 +50,10 @@ public final class HttpHeaderNames {
      */
     public static final AsciiString ACCEPT_PATCH = AsciiString.cached("accept-patch");
     /**
+     * {@code "accept-query"}
+     */
+    public static final AsciiString ACCEPT_QUERY = AsciiString.cached("accept-query");
+    /**
      * {@code "access-control-allow-credentials"}
      */
     public static final AsciiString ACCESS_CONTROL_ALLOW_CREDENTIALS =
@@ -70,6 +74,11 @@ public final class HttpHeaderNames {
     public static final AsciiString ACCESS_CONTROL_ALLOW_ORIGIN =
             AsciiString.cached("access-control-allow-origin");
     /**
+     * {@code "access-control-allow-origin"}
+     */
+    public static final AsciiString ACCESS_CONTROL_ALLOW_PRIVATE_NETWORK =
+            AsciiString.cached("access-control-allow-private-network");
+    /**
      * {@code "access-control-expose-headers"}
      */
     public static final AsciiString ACCESS_CONTROL_EXPOSE_HEADERS =
@@ -88,6 +97,11 @@ public final class HttpHeaderNames {
      */
     public static final AsciiString ACCESS_CONTROL_REQUEST_METHOD =
             AsciiString.cached("access-control-request-method");
+    /**
+     * {@code "access-control-request-private-network"}
+     */
+    public static final AsciiString ACCESS_CONTROL_REQUEST_PRIVATE_NETWORK =
+            AsciiString.cached("access-control-request-private-network");
     /**
      * {@code "age"}
      */
@@ -160,6 +174,10 @@ public final class HttpHeaderNames {
      * {@code "date"}
      */
     public static final AsciiString DATE = AsciiString.cached("date");
+    /**
+     * {@code "dnt"}
+     */
+    public static final AsciiString DNT = AsciiString.cached("dnt");
     /**
      * {@code "etag"}
      */
@@ -319,6 +337,10 @@ public final class HttpHeaderNames {
      */
     public static final AsciiString UPGRADE = AsciiString.cached("upgrade");
     /**
+     * {@code "upgrade-insecure-requests"}
+     */
+    public static final AsciiString UPGRADE_INSECURE_REQUESTS = AsciiString.cached("upgrade-insecure-requests");
+    /**
      * {@code "user-agent"}
      */
     public static final AsciiString USER_AGENT = AsciiString.cached("user-agent");
@@ -354,6 +376,15 @@ public final class HttpHeaderNames {
      * {@code "x-frame-options"}
      */
     public static final AsciiString X_FRAME_OPTIONS = AsciiString.cached("x-frame-options");
+    /**
+     * {@code "x-requested-with"}
+     */
+    public static final AsciiString X_REQUESTED_WITH = AsciiString.cached("x-requested-with");
+
+    /**
+     * {@code "alt-svc"}
+     */
+    public static final AsciiString ALT_SVC = AsciiString.cached("alt-svc");
 
     private HttpHeaderNames() { }
 }

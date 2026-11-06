@@ -5,7 +5,7 @@
 * version 2.0 (the "License"); you may not use this file except in compliance
 * with the License. You may obtain a copy of the License at:
 *
-*   http://www.apache.org/licenses/LICENSE-2.0
+*   https://www.apache.org/licenses/LICENSE-2.0
 *
 * Unless required by applicable law or agreed to in writing, software
 * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
@@ -18,6 +18,7 @@ package io.netty.testsuite.transport.socket;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.buffer.ByteBuf;
+import io.netty.buffer.ByteBufAllocator;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInitializer;
@@ -32,12 +33,14 @@ import io.netty.handler.ssl.SslHandler;
 import io.netty.handler.ssl.SslHandshakeCompletionEvent;
 import io.netty.handler.ssl.SslProvider;
 import io.netty.handler.ssl.util.SelfSignedCertificate;
+import io.netty.util.internal.PlatformDependent;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
-import org.junit.Test;
-import org.junit.runner.RunWith;
-import org.junit.runners.Parameterized;
-import org.junit.runners.Parameterized.Parameters;
+import org.junit.jupiter.api.TestInfo;
+import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.api.function.Executable;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
 
 import javax.net.ssl.SSLPeerUnverifiedException;
 import javax.net.ssl.SSLSession;
@@ -48,13 +51,18 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executor;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.fail;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 
-@RunWith(Parameterized.class)
 public class SocketSslGreetingTest extends AbstractSocketTest {
 
     private static final InternalLogger logger = InternalLoggerFactory.getInstance(SocketSslGreetingTest.class);
@@ -74,7 +82,6 @@ public class SocketSslGreetingTest extends AbstractSocketTest {
         KEY_FILE = ssc.privateKey();
     }
 
-    @Parameters(name = "{index}: serverEngine = {0}, clientEngine = {1}")
     public static Collection<Object[]> data() throws Exception {
         List<SslContext> serverContexts = new ArrayList<SslContext>();
         serverContexts.add(SslContextBuilder.forServer(CERT_FILE, KEY_FILE).sslProvider(SslProvider.JDK).build());
@@ -95,70 +102,88 @@ public class SocketSslGreetingTest extends AbstractSocketTest {
         List<Object[]> params = new ArrayList<Object[]>();
         for (SslContext sc: serverContexts) {
             for (SslContext cc: clientContexts) {
-                params.add(new Object[] { sc, cc });
+                params.add(new Object[] { sc, cc, true });
+                params.add(new Object[] { sc, cc, false });
             }
         }
         return params;
     }
 
-    private final SslContext serverCtx;
-    private final SslContext clientCtx;
-
-    public SocketSslGreetingTest(SslContext serverCtx, SslContext clientCtx) {
-        this.serverCtx = serverCtx;
-        this.clientCtx = clientCtx;
+    private static SslHandler newSslHandler(SslContext sslCtx, ByteBufAllocator allocator, Executor executor) {
+        if (executor == null) {
+            return sslCtx.newHandler(allocator);
+        } else {
+            return sslCtx.newHandler(allocator, executor);
+        }
     }
 
     // Test for https://github.com/netty/netty/pull/2437
-    @Test(timeout = 30000)
-    public void testSslGreeting() throws Throwable {
-        run();
+    @ParameterizedTest(name = "{index}: serverEngine = {0}, clientEngine = {1}, delegate = {2}")
+    @MethodSource("data")
+    @Timeout(value = 30000, unit = TimeUnit.MILLISECONDS)
+    public void testSslGreeting(final SslContext serverCtx, final SslContext clientCtx, final boolean delegate,
+                                TestInfo testInfo) throws Throwable {
+        run(testInfo, new Runner<ServerBootstrap, Bootstrap>() {
+            @Override
+            public void run(ServerBootstrap serverBootstrap, Bootstrap bootstrap) throws Throwable {
+                testSslGreeting(sb, cb, serverCtx, clientCtx, delegate);
+            }
+        });
     }
 
-    public void testSslGreeting(ServerBootstrap sb, Bootstrap cb) throws Throwable {
+    public void testSslGreeting(ServerBootstrap sb, Bootstrap cb, final SslContext serverCtx,
+                                final SslContext clientCtx, boolean delegate) throws Throwable {
         final ServerHandler sh = new ServerHandler();
         final ClientHandler ch = new ClientHandler();
 
-        sb.childHandler(new ChannelInitializer<Channel>() {
-            @Override
-            public void initChannel(Channel sch) throws Exception {
-                ChannelPipeline p = sch.pipeline();
-                p.addLast(serverCtx.newHandler(sch.alloc()));
-                p.addLast(new LoggingHandler(LOG_LEVEL));
-                p.addLast(sh);
+        final ExecutorService executorService = delegate ? Executors.newCachedThreadPool() : null;
+        try {
+            sb.childHandler(new ChannelInitializer<Channel>() {
+                @Override
+                public void initChannel(Channel sch) throws Exception {
+                    ChannelPipeline p = sch.pipeline();
+                    p.addLast(newSslHandler(serverCtx, sch.alloc(), executorService));
+                    p.addLast(new LoggingHandler(LOG_LEVEL));
+                    p.addLast(sh);
+                }
+            });
+
+            cb.handler(new ChannelInitializer<Channel>() {
+                @Override
+                public void initChannel(Channel sch) throws Exception {
+                    ChannelPipeline p = sch.pipeline();
+                    p.addLast(newSslHandler(clientCtx, sch.alloc(), executorService));
+                    p.addLast(new LoggingHandler(LOG_LEVEL));
+                    p.addLast(ch);
+                }
+            });
+
+            Channel sc = sb.bind().sync().channel();
+            Channel cc = cb.connect(sc.localAddress()).sync().channel();
+
+            ch.latch.await();
+
+            sh.channel.close().awaitUninterruptibly();
+            cc.close().awaitUninterruptibly();
+            sc.close().awaitUninterruptibly();
+
+            if (sh.exception.get() != null && !(sh.exception.get() instanceof IOException)) {
+                throw sh.exception.get();
             }
-        });
-
-        cb.handler(new ChannelInitializer<Channel>() {
-            @Override
-            public void initChannel(Channel sch) throws Exception {
-                ChannelPipeline p = sch.pipeline();
-                p.addLast(clientCtx.newHandler(sch.alloc()));
-                p.addLast(new LoggingHandler(LOG_LEVEL));
-                p.addLast(ch);
+            if (ch.exception.get() != null && !(ch.exception.get() instanceof IOException)) {
+                throw ch.exception.get();
             }
-        });
-
-        Channel sc = sb.bind().sync().channel();
-        Channel cc = cb.connect(sc.localAddress()).sync().channel();
-
-        ch.latch.await();
-
-        sh.channel.close().awaitUninterruptibly();
-        cc.close().awaitUninterruptibly();
-        sc.close().awaitUninterruptibly();
-
-        if (sh.exception.get() != null && !(sh.exception.get() instanceof IOException)) {
-            throw sh.exception.get();
-        }
-        if (ch.exception.get() != null && !(ch.exception.get() instanceof IOException)) {
-            throw ch.exception.get();
-        }
-        if (sh.exception.get() != null) {
-            throw sh.exception.get();
-        }
-        if (ch.exception.get() != null) {
-            throw ch.exception.get();
+            if (sh.exception.get() != null) {
+                throw sh.exception.get();
+            }
+            if (ch.exception.get() != null) {
+                throw ch.exception.get();
+            }
+        } finally {
+            if (executorService != null) {
+                executorService.shutdown();
+                assertTrue(executorService.awaitTermination(5, TimeUnit.SECONDS));
+            }
         }
     }
 
@@ -219,25 +244,31 @@ public class SocketSslGreetingTest extends AbstractSocketTest {
             if (evt instanceof SslHandshakeCompletionEvent) {
                 final SslHandshakeCompletionEvent event = (SslHandshakeCompletionEvent) evt;
                 if (event.isSuccess()) {
-                    SSLSession session = ctx.pipeline().get(SslHandler.class).engine().getSession();
-                    try {
-                        session.getPeerCertificates();
-                        fail();
-                    } catch (SSLPeerUnverifiedException e) {
-                        // expected
-                    }
+                    final SSLSession session = ctx.pipeline().get(SslHandler.class).engine().getSession();
+                    assertThrows(SSLPeerUnverifiedException.class, new Executable() {
+                        @Override
+                        public void execute() throws Throwable {
+                            session.getPeerCertificates();
+                        }
+                    });
                     try {
                         session.getPeerCertificateChain();
                         fail();
                     } catch (SSLPeerUnverifiedException e) {
                         // expected
+                    } catch (UnsupportedOperationException e) {
+                        // Starting from Java15 this method throws UnsupportedOperationException as it was
+                        // deprecated before and getPeerCertificates() should be used
+                        if (PlatformDependent.javaVersion() < 15) {
+                            throw e;
+                        }
                     }
-                    try {
-                        session.getPeerPrincipal();
-                        fail();
-                    } catch (SSLPeerUnverifiedException e) {
-                        // expected
-                    }
+                    assertThrows(SSLPeerUnverifiedException.class, new Executable() {
+                        @Override
+                        public void execute() throws Throwable {
+                            session.getPeerPrincipal();
+                        }
+                    });
                 }
             }
             ctx.fireUserEventTriggered(evt);

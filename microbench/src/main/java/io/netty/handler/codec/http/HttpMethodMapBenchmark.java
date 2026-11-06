@@ -1,11 +1,11 @@
 /*
- * Copyright 2017 The Netty Project
+ * Copyright 2019 The Netty Project
  *
  * The Netty Project licenses this file to you under the Apache License,
  * version 2.0 (the "License"); you may not use this file except in compliance
  * with the License. You may obtain a copy of the License at:
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *   https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
@@ -22,6 +22,7 @@ import org.openjdk.jmh.annotations.OutputTimeUnit;
 import org.openjdk.jmh.annotations.Scope;
 import org.openjdk.jmh.annotations.State;
 import org.openjdk.jmh.annotations.Warmup;
+import org.openjdk.jmh.infra.Blackhole;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -36,6 +37,7 @@ import static io.netty.handler.codec.http.HttpMethod.PATCH;
 import static io.netty.handler.codec.http.HttpMethod.POST;
 import static io.netty.handler.codec.http.HttpMethod.PUT;
 import static io.netty.handler.codec.http.HttpMethod.TRACE;
+import static io.netty.handler.codec.http.HttpMethod.QUERY;
 import static io.netty.util.internal.MathUtil.findNextPositivePowerOfTwo;
 
 @State(Scope.Benchmark)
@@ -60,6 +62,7 @@ public class HttpMethodMapBenchmark extends AbstractMicrobenchmark {
                 "POST",
                 "PUT",
                 "PATCH",
+                "QUERY",
                 "DELETE",
                 "TRACE",
                 "CONNECT"
@@ -97,6 +100,7 @@ public class HttpMethodMapBenchmark extends AbstractMicrobenchmark {
         OLD_MAP.put(DELETE.toString(), DELETE);
         OLD_MAP.put(TRACE.toString(), TRACE);
         OLD_MAP.put(CONNECT.toString(), CONNECT);
+        OLD_MAP.put(QUERY.toString(), QUERY);
 
         NEW_MAP = new SimpleStringMap<HttpMethod>(
                 new SimpleStringMap.Node<HttpMethod>(OPTIONS.toString(), OPTIONS),
@@ -105,6 +109,7 @@ public class HttpMethodMapBenchmark extends AbstractMicrobenchmark {
                 new SimpleStringMap.Node<HttpMethod>(POST.toString(), POST),
                 new SimpleStringMap.Node<HttpMethod>(PUT.toString(), PUT),
                 new SimpleStringMap.Node<HttpMethod>(PATCH.toString(), PATCH),
+                new SimpleStringMap.Node<HttpMethod>(QUERY.toString(), QUERY),
                 new SimpleStringMap.Node<HttpMethod>(DELETE.toString(), DELETE),
                 new SimpleStringMap.Node<HttpMethod>(TRACE.toString(), TRACE),
                 new SimpleStringMap.Node<HttpMethod>(CONNECT.toString(), CONNECT));
@@ -151,68 +156,56 @@ public class HttpMethodMapBenchmark extends AbstractMicrobenchmark {
     }
 
     @Benchmark
-    public int oldMapKnownMethods() throws Exception {
-        int x = 0;
+    public void oldMapKnownMethods(Blackhole bh) throws Exception {
         for (int i = 0; i < KNOWN_METHODS.length; ++i) {
-            x += OLD_MAP.get(KNOWN_METHODS[i]).toString().length();
+            bh.consume(OLD_MAP.get(KNOWN_METHODS[i]));
         }
-        return x;
     }
 
     @Benchmark
-    public int newMapKnownMethods() throws Exception {
-        int x = 0;
+    public void newMapKnownMethods(Blackhole bh) throws Exception {
         for (int i = 0; i < KNOWN_METHODS.length; ++i) {
-            x += NEW_MAP.get(KNOWN_METHODS[i]).toString().length();
+            bh.consume(NEW_MAP.get(KNOWN_METHODS[i]));
         }
-        return x;
     }
 
     @Benchmark
-    public int oldMapMixMethods() throws Exception {
-        int x = 0;
+    public void oldMapMixMethods(Blackhole bh) throws Exception {
         for (int i = 0; i < MIXED_METHODS.length; ++i) {
             HttpMethod method = OLD_MAP.get(MIXED_METHODS[i]);
             if (method != null) {
-                x += method.toString().length();
+                bh.consume(method);
             }
         }
-        return x;
     }
 
     @Benchmark
-    public int newMapMixMethods() throws Exception {
-        int x = 0;
+    public void newMapMixMethods(Blackhole bh) throws Exception {
         for (int i = 0; i < MIXED_METHODS.length; ++i) {
             HttpMethod method = NEW_MAP.get(MIXED_METHODS[i]);
             if (method != null) {
-                x += method.toString().length();
+                bh.consume(method);
             }
         }
-        return x;
     }
 
     @Benchmark
-    public int oldMapUnknownMethods() throws Exception {
-        int x = 0;
+    public void oldMapUnknownMethods(Blackhole bh) throws Exception {
         for (int i = 0; i < UNKNOWN_METHODS.length; ++i) {
             HttpMethod method = OLD_MAP.get(UNKNOWN_METHODS[i]);
             if (method != null) {
-                x += method.toString().length();
+                bh.consume(method);
             }
         }
-        return x;
     }
 
     @Benchmark
-    public int newMapUnknownMethods() throws Exception {
-        int x = 0;
+    public void newMapUnknownMethods(Blackhole bh) throws Exception {
         for (int i = 0; i < UNKNOWN_METHODS.length; ++i) {
             HttpMethod method = NEW_MAP.get(UNKNOWN_METHODS[i]);
             if (method != null) {
-                x += method.toString().length();
+                bh.consume(method);
             }
         }
-        return x;
     }
 }

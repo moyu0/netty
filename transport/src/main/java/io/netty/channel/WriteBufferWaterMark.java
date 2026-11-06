@@ -5,7 +5,7 @@
  * version 2.0 (the "License"); you may not use this file except in compliance
  * with the License. You may obtain a copy of the License at:
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *   https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
@@ -14,6 +14,8 @@
  * under the License.
  */
 package io.netty.channel;
+
+import static io.netty.util.internal.ObjectUtil.checkPositiveOrZero;
 
 /**
  * WriteBufferWaterMark is used to set low water mark and high water mark for the write buffer.
@@ -27,6 +29,9 @@ package io.netty.channel;
  * dropped down below the {@linkplain #low low water mark},
  * {@link Channel#isWritable()} will start to return
  * {@code true} again.
+ * <p>
+ * Note that messages needs to be handled by the {@link MessageSizeEstimator}
+ * used by the channel for {@link Channel#isWritable()} to provide accurate back-pressure.
  */
 public final class WriteBufferWaterMark {
 
@@ -54,9 +59,7 @@ public final class WriteBufferWaterMark {
      */
     WriteBufferWaterMark(int low, int high, boolean validate) {
         if (validate) {
-            if (low < 0) {
-                throw new IllegalArgumentException("write buffer's low water mark must be >= 0");
-            }
+            checkPositiveOrZero(low, "low");
             if (high < low) {
                 throw new IllegalArgumentException(
                         "write buffer's high water mark cannot be less than " +

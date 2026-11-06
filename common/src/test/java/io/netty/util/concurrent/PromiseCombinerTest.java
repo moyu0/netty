@@ -5,7 +5,7 @@
  * version 2.0 (the "License"); you may not use this file except in compliance
  * with the License. You may obtain a copy of the License at:
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *   https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
@@ -15,16 +15,19 @@
  */
 package io.netty.util.concurrent;
 
-import org.junit.Before;
-import org.junit.Test;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.function.Executable;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
 import org.mockito.invocation.InvocationOnMock;
 import org.mockito.stubbing.Answer;
 
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.Mockito.any;
 import static org.mockito.Mockito.eq;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -52,10 +55,22 @@ public class PromiseCombinerTest {
     private Promise<Void> p3;
     private PromiseCombiner combiner;
 
-    @Before
+    @BeforeEach
     public void setup() {
         MockitoAnnotations.initMocks(this);
-        combiner = new PromiseCombiner();
+        combiner = new PromiseCombiner(ImmediateEventExecutor.INSTANCE);
+    }
+
+    @Test
+    public void testNullArgument() {
+        assertThrows(NullPointerException.class, new Executable() {
+            @Override
+            public void execute() throws Throwable {
+                combiner.finish(null);
+            }
+        });
+        combiner.finish(p1);
+        verify(p1).trySuccess(null);
     }
 
     @Test
@@ -64,34 +79,59 @@ public class PromiseCombinerTest {
         verify(p1).trySuccess(null);
     }
 
-    @Test(expected = NullPointerException.class)
+    @Test
     public void testAddNullPromise() {
-        combiner.add(null);
+        assertThrows(NullPointerException.class, new Executable() {
+            @Override
+            public void execute() {
+                combiner.add(null);
+            }
+        });
     }
 
-    @Test(expected = NullPointerException.class)
+    @Test
     public void testAddAllNullPromise() {
-        combiner.addAll(null);
+        assertThrows(NullPointerException.class, new Executable() {
+            @Override
+            public void execute() {
+                combiner.addAll(null);
+            }
+        });
     }
 
-    @Test(expected = IllegalStateException.class)
+    @Test
     public void testAddAfterFinish() {
         combiner.finish(p1);
-        combiner.add(p2);
+        assertThrows(IllegalStateException.class, new Executable() {
+            @Override
+            public void execute() {
+                combiner.add(p2);
+            }
+        });
     }
 
     @SuppressWarnings("unchecked")
-    @Test(expected = IllegalStateException.class)
+    @Test
     public void testAddAllAfterFinish() {
         combiner.finish(p1);
-        combiner.addAll(p2);
+        assertThrows(IllegalStateException.class, new Executable() {
+            @Override
+            public void execute() {
+                combiner.addAll(p2);
+            }
+        });
     }
 
     @SuppressWarnings("unchecked")
-    @Test(expected = IllegalStateException.class)
+    @Test
     public void testFinishCalledTwiceThrows() {
         combiner.finish(p1);
-        combiner.finish(p1);
+        assertThrows(IllegalStateException.class, new Executable() {
+            @Override
+            public void execute() {
+                combiner.finish(p1);
+            }
+        });
     }
 
     @Test
@@ -146,6 +186,38 @@ public class PromiseCombinerTest {
         verifyNotCompleted(p3);
         combiner.finish(p3);
         verifyFail(p3, e1);
+    }
+
+    @Test
+    public void testEventExecutor() {
+        EventExecutor executor = mock(EventExecutor.class);
+        when(executor.inEventLoop()).thenReturn(false);
+        combiner = new PromiseCombiner(executor);
+
+        final Future<?> future = mock(Future.class);
+
+        assertThrows(IllegalStateException.class, new Executable() {
+            @Override
+            public void execute() throws Throwable {
+                combiner.add(future);
+            }
+        });
+
+        assertThrows(IllegalStateException.class, new Executable() {
+            @Override
+            public void execute() throws Throwable {
+                combiner.addAll(future);
+            }
+        });
+
+        @SuppressWarnings("unchecked")
+        final Promise<Void> promise = (Promise<Void>) mock(Promise.class);
+        assertThrows(IllegalStateException.class, new Executable() {
+            @Override
+            public void execute() throws Throwable {
+                combiner.finish(promise);
+            }
+        });
     }
 
     private static void verifyFail(Promise<Void> p, Throwable cause) {

@@ -5,7 +5,7 @@
  * version 2.0 (the "License"); you may not use this file except in compliance
  * with the License. You may obtain a copy of the License at:
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *   https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
@@ -25,6 +25,9 @@
 #include "netty_unix_filedescriptor.h"
 #include "netty_unix_jni.h"
 #include "netty_unix_util.h"
+#include "netty_jni_util.h"
+
+#define FILEDESCRIPTOR_CLASSNAME "io/netty/channel/unix/FileDescriptor"
 
 static jmethodID posId = NULL;
 static jmethodID limitId = NULL;
@@ -94,6 +97,9 @@ static jint netty_unix_filedescriptor_close(JNIEnv* env, jclass clazz, jint fd) 
 
 static jint netty_unix_filedescriptor_open(JNIEnv* env, jclass clazz, jstring path) {
     const char* f_path = (*env)->GetStringUTFChars(env, path, 0);
+    if (f_path == NULL) {
+        return -ENOMEM;
+    }
 
     int res = open(f_path, O_WRONLY | O_CREAT | O_TRUNC, 0666);
     (*env)->ReleaseStringUTFChars(env, path, f_path);
@@ -231,32 +237,41 @@ static jint netty_unix_filedescriptor_readAddress(JNIEnv* env, jclass clazz, jin
 
 static jlong netty_unix_filedescriptor_newPipe(JNIEnv* env, jclass clazz) {
     int fd[2];
+#ifdef __APPLE__
+    //  'pipe2' is only available on macOS 27.0 or newer
+    if (__builtin_available (macOS 27.0, *)) {
+#endif // __APPLE__
     if (pipe2) {
         // we can just use pipe2 and so save extra syscalls;
         if (pipe2(fd, O_NONBLOCK) != 0) {
             return -errno;
         }
-    } else {
-         if (pipe(fd) == 0) {
-            if (fcntl(fd[0], F_SETFD, O_NONBLOCK) < 0) {
-                int err = errno;
-                close(fd[0]);
-                close(fd[1]);
-                return -err;
-            }
-            if (fcntl(fd[1], F_SETFD, O_NONBLOCK) < 0) {
-                int err = errno;
-                close(fd[0]);
-                close(fd[1]);
-                return -err;
-            }
-         } else {
-            return -errno;
+        // encode the fds into a 64 bit value
+        return (((jlong) fd[0]) << 32) | fd[1];
+     }
+#ifdef __APPLE__
+     }
+#endif // __APPLE__
+     if (pipe(fd) == 0) {
+         // Read current flags and OR-ing in O_NONBLOCK to preserve old flags as well.
+         int flags0 = fcntl(fd[0], F_GETFL, 0);
+         if (flags0 < 0 || fcntl(fd[0], F_SETFL, flags0 | O_NONBLOCK) < 0) {
+             int err = errno;
+             close(fd[0]);
+             close(fd[1]);
+             return -err;
          }
-    }
-
-    // encode the fds into a 64 bit value
-    return (((jlong) fd[0]) << 32) | fd[1];
+         int flags1 = fcntl(fd[1], F_GETFL, 0);
+         if (flags1 < 0 || fcntl(fd[1], F_SETFL, flags1 | O_NONBLOCK) < 0) {
+             int err = errno;
+             close(fd[0]);
+             close(fd[1]);
+             return -err;
+         }
+         // encode the fds into a 64 bit value
+         return (((jlong) fd[0]) << 32) | fd[1];
+     }
+     return -errno;
 }
 // JNI Registered Methods End
 
@@ -275,66 +290,46 @@ static const JNINativeMethod method_table[] = {
 static const jint method_table_size = sizeof(method_table) / sizeof(method_table[0]);
 // JNI Method Registration Table End
 
+// IMPORTANT: If you add any NETTY_JNI_UTIL_LOAD_CLASS or NETTY_JNI_UTIL_FIND_CLASS calls you also need to update
+//            Unix to reflect that.
 jint netty_unix_filedescriptor_JNI_OnLoad(JNIEnv* env, const char* packagePrefix) {
-    if (netty_unix_util_register_natives(env, packagePrefix, "io/netty/channel/unix/FileDescriptor", method_table, method_table_size) != 0) {
-        return JNI_ERR;
+    int ret = JNI_ERR;
+    void* mem = NULL;
+    if (netty_jni_util_register_natives(env, packagePrefix, FILEDESCRIPTOR_CLASSNAME, method_table, method_table_size) != 0) {
+        goto done;
     }
-    void* mem = malloc(1);
-    if (mem == NULL) {
-        netty_unix_errors_throwOutOfMemoryError(env);
-        return JNI_ERR;
+    if ((mem = malloc(1)) == NULL) {
+        goto done;
     }
     jobject directBuffer = (*env)->NewDirectByteBuffer(env, mem, 1);
     if (directBuffer == NULL) {
-        free(mem);
-
-        netty_unix_errors_throwOutOfMemoryError(env);
-        return JNI_ERR;
+        goto done;
     }
     if ((*env)->GetDirectBufferAddress(env, directBuffer) == NULL) {
-        free(mem);
-
-        netty_unix_errors_throwRuntimeException(env, "failed to get direct buffer address");
-        return JNI_ERR;
+        goto done;
     }
-
     jclass cls = (*env)->GetObjectClass(env, directBuffer);
+    if (cls == NULL) {
+        goto done;
+    }
 
     // Get the method id for Buffer.position() and Buffer.limit(). These are used as fallback if
     // it is not possible to obtain the position and limit using the fields directly.
-    posId = (*env)->GetMethodID(env, cls, "position", "()I");
-    if (posId == NULL) {
-        free(mem);
+    NETTY_JNI_UTIL_GET_METHOD(env, cls, posId, "position", "()I", done);
+    NETTY_JNI_UTIL_GET_METHOD(env, cls, limitId, "limit", "()I", done);
 
-        // position method was not found.. something is wrong so bail out
-        netty_unix_errors_throwRuntimeException(env, "failed to get method ID: ByteBuffer.position()");
-        return JNI_ERR;
-    }
-
-    limitId = (*env)->GetMethodID(env, cls, "limit", "()I");
-    if (limitId == NULL) {
-        free(mem);
-
-        // limit method was not found.. something is wrong so bail out
-        netty_unix_errors_throwRuntimeException(env, "failed to get method ID: ByteBuffer.limit()");
-        return JNI_ERR;
-    }
     // Try to get the ids of the position and limit fields. We later then check if we was able
     // to find them and if so use them get the position and limit of the buffer. This is
     // much faster then call back into java via (*env)->CallIntMethod(...).
-    posFieldId = (*env)->GetFieldID(env, cls, "position", "I");
-    if (posFieldId == NULL) {
-        // this is ok as we can still use the method so just clear the exception
-        (*env)->ExceptionClear(env);
-    }
-    limitFieldId = (*env)->GetFieldID(env, cls, "limit", "I");
-    if (limitFieldId == NULL) {
-        // this is ok as we can still use the method so just clear the exception
-        (*env)->ExceptionClear(env);
-    }
+    NETTY_JNI_UTIL_TRY_GET_FIELD(env, cls, posFieldId, "position", "I");
+    NETTY_JNI_UTIL_TRY_GET_FIELD(env, cls, limitFieldId, "limit", "I");
 
+    ret = NETTY_JNI_UTIL_JNI_VERSION;
+done:
     free(mem);
-    return NETTY_JNI_VERSION;
+    return ret;
 }
 
-void netty_unix_filedescriptor_JNI_OnUnLoad(JNIEnv* env) { }
+void netty_unix_filedescriptor_JNI_OnUnLoad(JNIEnv* env, const char* packagePrefix) {
+    netty_jni_util_unregister_natives(env, packagePrefix, FILEDESCRIPTOR_CLASSNAME);
+}

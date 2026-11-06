@@ -5,7 +5,7 @@
  * version 2.0 (the "License"); you may not use this file except in compliance
  * with the License. You may obtain a copy of the License at:
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *   https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
@@ -16,37 +16,25 @@
 package io.netty.handler.ssl;
 
 import java.security.Provider;
-import org.junit.BeforeClass;
-import org.junit.Ignore;
 
-import org.junit.runner.RunWith;
-import org.junit.runners.Parameterized;
+import org.junit.jupiter.api.Disabled;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.DisabledIf;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
 
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.List;
+import javax.net.ssl.SSLSessionContext;
 
-import static org.junit.Assume.assumeTrue;
 
-@RunWith(Parameterized.class)
+@DisabledIf("checkConscryptDisabled")
 public class ConscryptJdkSslEngineInteropTest extends SSLEngineTest {
 
-    @Parameterized.Parameters(name = "{index}: bufferType = {0}, combo = {1}")
-    public static Collection<Object[]> data() {
-        List<Object[]> params = new ArrayList<Object[]>();
-        for (BufferType type: BufferType.values()) {
-            params.add(new Object[] { type, ProtocolCipherCombo.tlsv12()});
-        }
-        return params;
+    public ConscryptJdkSslEngineInteropTest() {
+        super(false);
     }
 
-    public ConscryptJdkSslEngineInteropTest(BufferType type, ProtocolCipherCombo combo) {
-        super(type, combo);
-    }
-
-    @BeforeClass
-    public static void checkConscrypt() {
-        assumeTrue(Conscrypt.isAvailable());
+    static boolean checkConscryptDisabled() {
+        return !Conscrypt.isAvailable();
     }
 
     @Override
@@ -64,14 +52,20 @@ public class ConscryptJdkSslEngineInteropTest extends SSLEngineTest {
         return Java8SslTestUtils.conscryptProvider();
     }
 
-    @Ignore /* Does the JDK support a "max certificate chain length"? */
+    @MethodSource("newTestParams")
+    @ParameterizedTest
+    @Disabled /* Does the JDK support a "max certificate chain length"? */
     @Override
-    public void testMutualAuthValidClientCertChainTooLongFailOptionalClientAuth() throws Exception {
+    public void testMutualAuthValidClientCertChainTooLongFailOptionalClientAuth(SSLEngineTestParam param)
+            throws Exception {
     }
 
-    @Ignore /* Does the JDK support a "max certificate chain length"? */
+    @MethodSource("newTestParams")
+    @ParameterizedTest
+    @Disabled /* Does the JDK support a "max certificate chain length"? */
     @Override
-    public void testMutualAuthValidClientCertChainTooLongFailRequireClientAuth() throws Exception {
+    public void testMutualAuthValidClientCertChainTooLongFailRequireClientAuth(SSLEngineTestParam param)
+            throws Exception {
     }
 
     @Override
@@ -80,10 +74,29 @@ public class ConscryptJdkSslEngineInteropTest extends SSLEngineTest {
         return super.mySetupMutualAuthServerIsValidServerException(cause) || causedBySSLException(cause);
     }
 
-    @Ignore("Ignore due bug in Conscrypt")
     @Override
-    public void testSessionBindingEvent() throws Exception {
-        // Ignore due bug in Conscrypt where the incorrect SSLSession object is used in the SSLSessionBindingEvent.
-        // See https://github.com/google/conscrypt/issues/593
+    protected void invalidateSessionsAndAssert(SSLSessionContext context) {
+        // Not supported by conscrypt
+    }
+
+    @MethodSource("newTestParams")
+    @ParameterizedTest
+    @Disabled("Disabled due a conscrypt bug")
+    @Override
+    public void testInvalidSNIIsIgnoredAndNotThrow(SSLEngineTestParam param) throws Exception {
+        super.testInvalidSNIIsIgnoredAndNotThrow(param);
+    }
+
+    @Test
+    @Disabled("Disabled due a conscrypt bug")
+    @Override
+    public void testTLSv13DisabledIfNoValidCipherSuiteConfigured() throws Exception {
+        super.testTLSv13DisabledIfNoValidCipherSuiteConfigured();
+    }
+
+    @Disabled("Disabled due a conscrypt bug")
+    @Override
+    public void mustCallResumeTrustedOnSessionResumption(SSLEngineTestParam param) throws Exception {
+        super.mustCallResumeTrustedOnSessionResumption(param);
     }
 }

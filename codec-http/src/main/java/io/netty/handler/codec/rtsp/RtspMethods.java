@@ -5,7 +5,7 @@
  * version 2.0 (the "License"); you may not use this file except in compliance
  * with the License. You may obtain a copy of the License at:
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *   https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
@@ -15,9 +15,12 @@
  */
 package io.netty.handler.codec.rtsp;
 
+import static io.netty.util.internal.ObjectUtil.checkNotNull;
+
 import io.netty.handler.codec.http.HttpMethod;
 
 import java.util.HashMap;
+import java.util.Locale;
 import java.util.Map;
 
 /**
@@ -38,62 +41,62 @@ public final class RtspMethods {
      * The DESCRIBE getMethod retrieves the description of a presentation or
      * media object identified by the request URL from a server.
      */
-    public static final HttpMethod DESCRIBE = new HttpMethod("DESCRIBE");
+    public static final HttpMethod DESCRIBE = HttpMethod.valueOf("DESCRIBE");
 
     /**
      * The ANNOUNCE posts the description of a presentation or media object
      * identified by the request URL to a server, or updates the client-side
      * session description in real-time.
      */
-    public static final HttpMethod ANNOUNCE = new HttpMethod("ANNOUNCE");
+    public static final HttpMethod ANNOUNCE = HttpMethod.valueOf("ANNOUNCE");
 
     /**
      * The SETUP request for a URI specifies the transport mechanism to be
      * used for the streamed media.
      */
-    public static final HttpMethod SETUP = new HttpMethod("SETUP");
+    public static final HttpMethod SETUP = HttpMethod.valueOf("SETUP");
 
     /**
      * The PLAY getMethod tells the server to start sending data via the
      * mechanism specified in SETUP.
      */
-    public static final HttpMethod PLAY = new HttpMethod("PLAY");
+    public static final HttpMethod PLAY = HttpMethod.valueOf("PLAY");
 
     /**
      * The PAUSE request causes the stream delivery to be interrupted
      * (halted) temporarily.
      */
-    public static final HttpMethod PAUSE = new HttpMethod("PAUSE");
+    public static final HttpMethod PAUSE = HttpMethod.valueOf("PAUSE");
 
     /**
      * The TEARDOWN request stops the stream delivery for the given URI,
      * freeing the resources associated with it.
      */
-    public static final HttpMethod TEARDOWN = new HttpMethod("TEARDOWN");
+    public static final HttpMethod TEARDOWN = HttpMethod.valueOf("TEARDOWN");
 
     /**
      * The GET_PARAMETER request retrieves the value of a parameter of a
      * presentation or stream specified in the URI.
      */
-    public static final HttpMethod GET_PARAMETER = new HttpMethod("GET_PARAMETER");
+    public static final HttpMethod GET_PARAMETER = HttpMethod.valueOf("GET_PARAMETER");
 
     /**
      * The SET_PARAMETER requests to set the value of a parameter for a
      * presentation or stream specified by the URI.
      */
-    public static final HttpMethod SET_PARAMETER = new HttpMethod("SET_PARAMETER");
+    public static final HttpMethod SET_PARAMETER = HttpMethod.valueOf("SET_PARAMETER");
 
     /**
      * The REDIRECT request informs the client that it must connect to another
      * server location.
      */
-    public static final HttpMethod REDIRECT = new HttpMethod("REDIRECT");
+    public static final HttpMethod REDIRECT = HttpMethod.valueOf("REDIRECT");
 
     /**
      * The RECORD getMethod initiates recording a range of media data according to
      * the presentation description.
      */
-    public static final HttpMethod RECORD = new HttpMethod("RECORD");
+    public static final HttpMethod RECORD = HttpMethod.valueOf("RECORD");
 
     private static final Map<String, HttpMethod> methodMap = new HashMap<String, HttpMethod>();
 
@@ -117,21 +120,15 @@ public final class RtspMethods {
      * will be returned.  Otherwise, a new instance will be returned.
      */
     public static HttpMethod valueOf(String name) {
-        if (name == null) {
-            throw new NullPointerException("name");
-        }
-
-        name = name.trim().toUpperCase();
-        if (name.isEmpty()) {
-            throw new IllegalArgumentException("empty name");
-        }
-
+        // RFC 2326 RTSP method names are ASCII tokens. toUpperCase() without an explicit Locale
+        // uses the JVM default, which in Turkish (tr_TR) maps 'i' to 'İ' (U+0130) and breaks the
+        // lookup of methods such as "describe" or "redirect" against the cached uppercase keys.
+        name = checkNotNull(name, "name").toUpperCase(Locale.US);
         HttpMethod result = methodMap.get(name);
         if (result != null) {
             return result;
-        } else {
-            return new HttpMethod(name);
         }
+        return HttpMethod.valueOf(name);
     }
 
     private RtspMethods() {

@@ -5,7 +5,7 @@
  * version 2.0 (the "License"); you may not use this file except in compliance
  * with the License. You may obtain a copy of the License at:
  *
- * http://www.apache.org/licenses/LICENSE-2.0
+ * https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
@@ -15,14 +15,15 @@
  */
 package io.netty.handler.traffic;
 
-import io.netty.buffer.ByteBuf;
 import io.netty.channel.ChannelHandler.Sharable;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelPromise;
 import io.netty.util.concurrent.EventExecutor;
+import io.netty.util.internal.ObjectUtil;
 import io.netty.util.internal.PlatformDependent;
 
+import java.nio.channels.ClosedChannelException;
 import java.util.ArrayDeque;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ScheduledExecutorService;
@@ -103,10 +104,11 @@ public class GlobalTrafficShapingHandler extends AbstractTrafficShapingHandler {
      * Create the global TrafficCounter.
      */
     void createGlobalTrafficCounter(ScheduledExecutorService executor) {
-        if (executor == null) {
-            throw new NullPointerException("executor");
-        }
-        TrafficCounter tc = new TrafficCounter(this, executor, "GlobalTC", checkInterval);
+        TrafficCounter tc = new TrafficCounter(this,
+                ObjectUtil.checkNotNull(executor, "executor"),
+                "GlobalTC",
+                checkInterval);
+
         setTrafficCounter(tc);
         tc.start();
     }
@@ -194,7 +196,7 @@ public class GlobalTrafficShapingHandler extends AbstractTrafficShapingHandler {
      * default max time as delay allowed value of 15000 ms and no limit.
      *
      * @param executor
-     *          the {@link ScheduledExecutorService} to use for the {@link TrafficCounter}.
+     *          the {@link EventExecutor} to use for the {@link TrafficCounter}.
      */
     public GlobalTrafficShapingHandler(EventExecutor executor) {
         createGlobalTrafficCounter(executor);
@@ -274,13 +276,13 @@ public class GlobalTrafficShapingHandler extends AbstractTrafficShapingHandler {
                         queuesSize.addAndGet(-size);
                         ctx.write(toSend.toSend, toSend.promise);
                     }
-                } else {
+                } else if (!perChannel.messagesQueue.isEmpty()) {
                     queuesSize.addAndGet(-perChannel.queueSize);
+                    ClosedChannelException cause = new ClosedChannelException();
                     for (ToSend toSend : perChannel.messagesQueue) {
-                        if (toSend.toSend instanceof ByteBuf) {
-                            ((ByteBuf) toSend.toSend).release();
-                        }
+                        releaseAndFailQueuedWrite(toSend.toSend, toSend.promise, cause);
                     }
+                    perChannel.queueSize = 0;
                 }
                 perChannel.messagesQueue.clear();
             }
